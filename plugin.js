@@ -621,6 +621,53 @@ ${S} [data-chat-surface]:has([data-slot="aui_intro"]) [data-slot="aui_thread-con
   padding-bottom: 1.5rem;
 }
 ${S} [data-chat-surface]:has([data-slot="aui_intro"]) button[aria-label="Scroll to bottom"] { display: none; }
+
+/* Claude's account row: the square profile rail gives way to one
+   "avatar · name · model ⌄" row whose menu opens upward. Other themes keep the rail. */
+#claude-skin-profile { display: none; }
+${S} [data-slot="sidebar-content"] div:has(> [data-slot="profile-rail"]) { display: none; }
+${S} #claude-skin-profile {
+  display: block; position: relative; flex-shrink: 0;
+  margin: 0.25rem -0.125rem 0.375rem; font-family: var(--dt-font-sans);
+}
+${S} #claude-skin-profile .cs-row {
+  display: flex; align-items: center; gap: 0.5rem; width: 100%;
+  padding: 0.375rem 0.5rem; border-radius: 0.5rem; text-align: left;
+  color: var(--dt-foreground); font-size: 0.875rem;
+}
+${S} #claude-skin-profile .cs-row:hover,
+${S} #claude-skin-profile[data-open] > .cs-row { background: var(--claude-row-hover); }
+${S} #claude-skin-profile .cs-avatar {
+  display: grid; place-items: center; flex-shrink: 0;
+  width: 1.375rem; height: 1.375rem; border-radius: 999px;
+  font-size: 0.6875rem; font-weight: 600; text-transform: uppercase; color: #fff;
+}
+${S} #claude-skin-profile .cs-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+${S} #claude-skin-profile .cs-sub { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--dt-muted-foreground); font-size: 0.75rem; }
+${S} #claude-skin-profile .cs-row > .codicon { margin-left: 0.125rem; color: var(--dt-muted-foreground); font-size: 0.75rem; transition: transform 120ms; }
+${S} #claude-skin-profile[data-open] > .cs-row > .codicon { transform: rotate(180deg); }
+${S} #claude-skin-profile .cs-menu {
+  position: absolute; left: 0; right: 0; bottom: calc(100% + 0.375rem); z-index: 50;
+  display: none; padding: 0.375rem;
+  max-height: 60vh; overflow-y: auto;
+  background: var(--dt-card); color: var(--dt-foreground);
+  border: 1px solid var(--dt-sidebar-border); border-radius: 0.75rem;
+  box-shadow: 0 8px 24px -8px rgb(0 0 0 / 0.25);
+}
+${S} #claude-skin-profile[data-open] .cs-menu { display: block; }
+${S} #claude-skin-profile .cs-head { padding: 0.25rem 0.5rem 0.375rem; color: var(--dt-muted-foreground); font-size: 0.8125rem; }
+${S} #claude-skin-profile .cs-item {
+  display: flex; align-items: center; gap: 0.625rem; width: 100%;
+  padding: 0.375rem 0.5rem; border-radius: 0.375rem; text-align: left; font-size: 0.875rem;
+}
+${S} #claude-skin-profile .cs-item:hover,
+${S} #claude-skin-profile .cs-item:focus-visible { background: var(--claude-row-hover); outline: none; }
+${S} #claude-skin-profile .cs-item .cs-avatar { width: 1.125rem; height: 1.125rem; font-size: 0.5625rem; }
+${S} #claude-skin-profile .cs-item > .codicon { width: 1.125rem; text-align: center; font-size: 0.9375rem; }
+${S} #claude-skin-profile .cs-item .cs-text { display: flex; min-width: 0; flex-direction: column; }
+${S} #claude-skin-profile .cs-kbd { margin-left: auto; color: var(--dt-muted-foreground); font-size: 0.75rem; }
+${S} #claude-skin-profile .cs-sep { height: 1px; margin: 0.375rem 0.25rem; background: var(--dt-sidebar-border); }
+${S} #claude-skin-profile .cs-empty { padding: 0.375rem 0.5rem; color: var(--dt-muted-foreground); font-size: 0.8125rem; }
 `
 
 // ── Greeting clock ──────────────────────────────────────────────────────────
@@ -633,6 +680,91 @@ function greeting() {
 
 function paintGreeting() {
   document.documentElement.style.setProperty('--claude-greeting', JSON.stringify(greeting()))
+}
+
+// ── Account row: Claude's bottom-left "avatar · name · plan ⌄" ─────────────
+// Replaces the square profile rail (hidden by CSS under the claude themes).
+// Plain DOM like the other injected bits: the SDK has no sidebar-footer area.
+
+const esc = s => String(s).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)
+const label = p => (p.display_name ?? '').trim() || p.name
+const avatar = p => {
+  const color = sdk.profileColor?.(p.name) ?? 'var(--dt-primary)'
+  return `<span class="cs-avatar" style="background:${color}">${esc(label(p).slice(0, 1))}</span>`
+}
+const shortModel = m => (m || '').split('/').pop().replace(/^claude-/, '')
+
+function mountProfileRow(ctx) {
+  const root = document.createElement('div')
+  root.id = 'claude-skin-profile'
+  root.style.order = '99' // after the session list whatever React appends later
+  let profiles = []
+
+  const current = () => {
+    const key = profileKey(host.state.profile.get())
+    return profiles.find(p => profileKey(p.name) === key) ?? { name: key }
+  }
+
+  const render = () => {
+    const me = current()
+    const model = shortModel(host.state.model.get())
+    const others = profiles.filter(p => profileKey(p.name) !== profileKey(me.name))
+    const open = root.hasAttribute('data-open')
+    // innerHTML is safe here: every profile/model string goes through esc(),
+    // and the avatar colour comes from the SDK's hsl() generator.
+    root.innerHTML = `
+      <div class="cs-menu" role="menu" aria-label="Profiles">
+        <div class="cs-head">${esc(label(me))}</div>
+        ${others.length
+          ? others.map(p => `<button type="button" role="menuitem" class="cs-item" data-profile="${esc(p.name)}">${avatar(p)}<span class="cs-text"><span class="cs-name">${esc(label(p))}</span>${p.model ? `<span class="cs-sub">${esc(shortModel(p.model))}</span>` : ''}</span></button>`).join('')
+          : '<div class="cs-empty">No other profiles</div>'}
+        <div class="cs-sep"></div>
+        <button type="button" role="menuitem" class="cs-item" data-nav="/profiles"><i class="codicon codicon-organization" aria-hidden="true"></i>Manage profiles</button>
+        <button type="button" role="menuitem" class="cs-item" data-nav="/settings"><i class="codicon codicon-settings-gear" aria-hidden="true"></i>Settings<span class="cs-kbd">⌘ ,</span></button>
+      </div>
+      <button type="button" class="cs-row" aria-haspopup="menu" aria-expanded="${open}">
+        ${avatar(me)}<span class="cs-name">${esc(label(me))}</span>${model ? `<span class="cs-sub">· ${esc(model)}</span>` : ''}
+        <i class="codicon codicon-chevron-up" aria-hidden="true"></i>
+      </button>`
+  }
+
+  const setOpen = open => {
+    root.toggleAttribute('data-open', open)
+    root.querySelector('.cs-row')?.setAttribute('aria-expanded', String(open))
+    if (open) {
+      // Fresh list on every open: profiles get created/renamed elsewhere.
+      host.profiles.list().then(r => { profiles = r.profiles ?? []; render() }).catch(() => {})
+    }
+  }
+
+  root.addEventListener('click', e => {
+    const t = e.target.closest('button')
+    if (!t) return
+    if (t.classList.contains('cs-row')) return setOpen(!root.hasAttribute('data-open'))
+    setOpen(false)
+    if (t.dataset.profile) host.newChat(t.dataset.profile) // same door as the rail: pins, dials, fresh draft
+    else if (t.dataset.nav) host.navigate(t.dataset.nav)
+  })
+  const onDoc = e => { if (!root.contains(e.target)) setOpen(false) }
+  const onKey = e => { if (e.key === 'Escape' && root.hasAttribute('data-open')) { setOpen(false); root.querySelector('.cs-row')?.focus() } }
+  document.addEventListener('pointerdown', onDoc, true)
+  document.addEventListener('keydown', onKey)
+
+  const unsubs = [host.state.profile.subscribe(render), host.state.model.subscribe(render)]
+  host.profiles.list().then(r => { profiles = r.profiles ?? []; render() }).catch(() => {})
+
+  const ensure = () => {
+    const content = document.querySelector('[data-slot="sidebar-content"]')
+    if (content && root.parentElement !== content) content.appendChild(root)
+  }
+  ensure()
+  ctx.setInterval(ensure, 1000)
+  ctx.onDispose(() => {
+    unsubs.forEach(u => u())
+    document.removeEventListener('pointerdown', onDoc, true)
+    document.removeEventListener('keydown', onKey)
+    root.remove()
+  })
 }
 
 // ── First-run: pick the theme, follow the system, clear the right rail ─────
@@ -732,6 +864,7 @@ export default {
 
     ensureSearchButton()
     ensureMoreRow()
+    mountProfileRow(ctx)
     ctx.setInterval(() => {
       ensureSearchButton()
       ensureMoreRow()
